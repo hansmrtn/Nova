@@ -68,7 +68,8 @@ impl<G: Group> StepCircuit<G::Scalar> for FibonacciCircuit<G> {
   }
 }
 
-fn fib_helper(n: usize) -> Vec<u64> {
+// for verification
+pub fn fib_helper(n: usize) -> Vec<u64> {
   let mut fib = vec![0u64, 1u64];
   for i in 2..=n {
     let next = fib[i - 1].wrapping_add(fib[i - 2]);
@@ -152,6 +153,8 @@ fn main() {
     println!("RecursiveSNARK.::verify: {:?}, took: {:?}", res.is_ok(), start.elapsed()); 
     assert!(res.is_ok());
 
+    let z_final = res.unwrap();
+
     // compress the snark
     let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap(); 
     let start = Instant::now(); 
@@ -175,6 +178,14 @@ fn main() {
 
     assert!(res.is_ok());
     
-    println!("Done!");
+    println!("Done snarking!");
+
+
+    let native_fib = fib_helper(num_steps); 
+    let expected = u64_to_scalar::<<E1 as Engine>::GE>(native_fib[num_steps]);
+
+    println!("{:?}", z_final);
+    println!("expected {:?}", expected);
+    assert_eq!(z_final[0], expected); 
   }
 }
