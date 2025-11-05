@@ -85,7 +85,7 @@ fn main() {
   println!("Nova Fibonacci Sequence Proof");
   println!("-----------------------------");
 
-  let test_cases = vec![1, 10, 100];
+  let test_cases = vec![1, 10, 93]; // 93 is max case due to u64 field wrapping
   for num_steps in test_cases {
     println!("computing Fibonacci sequence fopr {} steps", num_steps);
 
@@ -146,12 +146,35 @@ fn main() {
         "Total proving time for {} steps: {:?}", num_steps, total_prove_time); 
 
     // verify
-    
     println!("Verifying the snark!..."); 
     let start = Instant::now(); 
     let res = snark.verify(&pp, num_steps, &z0); 
     println!("RecursiveSNARK.::verify: {:?}, took: {:?}", res.is_ok(), start.elapsed()); 
     assert!(res.is_ok());
 
+    // compress the snark
+    let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap(); 
+    let start = Instant::now(); 
+    let compressed_snark = CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &snark).unwrap();
+    println!("CompressedSNARK::prove took {:?}", start.elapsed());
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default()); 
+    bincode::serde::encode_into_std_write(&compressed_snark, &mut encoder, bincode::config::legacy()).unwrap(); 
+
+    let encoded_comp_snark = encoder.finish().unwrap();
+    println!("Compressed snark size: {:?} bytes", encoded_comp_snark.len()); 
+
+    // verify compressed snark
+    let start = Instant::now(); 
+    let res = compressed_snark.verify(&vk, num_steps, &z0);
+    println!(
+      "CompressedSNARK::verify: {:?}, took {:?}",
+      res.is_ok(),
+      start.elapsed()
+    );
+
+    assert!(res.is_ok());
+    
+    println!("Done!");
   }
 }
