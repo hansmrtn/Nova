@@ -3,6 +3,7 @@
 //! The verifier in this preprocessing SNARK maintains a commitment to R1CS matrices. This is beneficial when using a
 //! polynomial commitment scheme in which the verifier's costs is succinct.
 //! The SNARK implemented here is described in the MicroNova paper.
+use crate::traits::evm_serde::EvmCompatSerde;
 use crate::{
   digest::{DigestComputer, SimpleDigestible},
   errors::NovaError,
@@ -34,6 +35,7 @@ use itertools::Itertools as _;
 use once_cell::sync::OnceCell;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 
 fn padded<E: Engine>(v: &[E::Scalar], n: usize, e: &E::Scalar) -> Vec<E::Scalar> {
   let mut v_padded = vec![*e; n];
@@ -286,19 +288,16 @@ impl<E: Engine> SumcheckEngine<E> for WitnessBoundSumcheck<E> {
   }
 
   fn evaluation_points(&self) -> Vec<Vec<E::Scalar>> {
-    let comb_func = |poly_A_comp: &E::Scalar,
-                     poly_B_comp: &E::Scalar,
-                     _: &E::Scalar|
-     -> E::Scalar { *poly_A_comp * *poly_B_comp };
+    let (eval_point_0, bound_coeff, eval_point_inf) =
+      SumcheckProof::<E>::compute_eval_points_cubic_with_deg::<2>(
+        &self.poly_masked_eq,
+        &self.poly_W,
+        &self.poly_W, // unused
+      );
 
-    let (eval_point_0, eval_point_2, eval_point_3) = SumcheckProof::<E>::compute_eval_points_cubic(
-      &self.poly_masked_eq,
-      &self.poly_W,
-      &self.poly_W, // unused
-      &comb_func,
-    );
+    assert_eq!(bound_coeff, E::Scalar::ZERO);
 
-    vec![vec![eval_point_0, eval_point_2, eval_point_3]]
+    vec![vec![eval_point_0, bound_coeff, eval_point_inf]]
   }
 
   fn bound(&mut self, r: &E::Scalar) {
@@ -526,27 +525,20 @@ impl<E: Engine> SumcheckEngine<E> for MemorySumcheckInstance<E> {
   }
 
   fn evaluation_points(&self) -> Vec<Vec<E::Scalar>> {
-    let comb_func = |poly_A_comp: &E::Scalar,
-                     poly_B_comp: &E::Scalar,
-                     _poly_C_comp: &E::Scalar|
-     -> E::Scalar { *poly_A_comp - *poly_B_comp };
-
     // inv related evaluation points
     // 0 = ∑ TS[i]/(T[i] + r) - 1/(W[i] + r)
     let (eval_inv_0_row, eval_inv_2_row, eval_inv_3_row) =
-      SumcheckProof::<E>::compute_eval_points_cubic(
+      SumcheckProof::<E>::compute_eval_points_cubic_with_deg::<1>(
         &self.t_plus_r_inv_row,
         &self.w_plus_r_inv_row,
         &self.poly_zero,
-        &comb_func,
       );
 
     let (eval_inv_0_col, eval_inv_2_col, eval_inv_3_col) =
-      SumcheckProof::<E>::compute_eval_points_cubic(
+      SumcheckProof::<E>::compute_eval_points_cubic_with_deg::<1>(
         &self.t_plus_r_inv_col,
         &self.w_plus_r_inv_col,
         &self.poly_zero,
-        &comb_func,
       );
 
     let (
@@ -753,15 +745,11 @@ impl<E: Engine> SumcheckEngine<E> for InnerSumcheckInstance<E> {
 
   fn evaluation_points(&self) -> Vec<Vec<E::Scalar>> {
     let (poly_A, poly_B, poly_C) = (&self.poly_L_row, &self.poly_L_col, &self.poly_val);
-    let comb_func = |poly_A_comp: &E::Scalar,
-                     poly_B_comp: &E::Scalar,
-                     poly_C_comp: &E::Scalar|
-     -> E::Scalar { *poly_A_comp * *poly_B_comp * *poly_C_comp };
 
-    let (eval_point_0, eval_point_2, eval_point_3) =
-      SumcheckProof::<E>::compute_eval_points_cubic(poly_A, poly_B, poly_C, &comb_func);
+    let (eval_point_0, bound_coeff, eval_point_inf) =
+      SumcheckProof::<E>::compute_eval_points_cubic_with_deg::<3>(poly_A, poly_B, poly_C);
 
-    vec![vec![eval_point_0, eval_point_2, eval_point_3]]
+    vec![vec![eval_point_0, bound_coeff, eval_point_inf]]
   }
 
   fn bound(&mut self, r: &E::Scalar) {
@@ -806,6 +794,7 @@ impl<E: Engine, EE: EvaluationEngineTrait<E>> SimpleDigestible for VerifierKey<E
 /// A succinct proof of knowledge of a witness to a relaxed R1CS instance
 /// The proof is produced using Spartan's combination of the sum-check and
 /// the commitment to a vector viewed as a polynomial commitment
+#[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct RelaxedR1CSSNARK<E: Engine, EE: EvaluationEngineTrait<E>> {
@@ -824,34 +813,55 @@ pub struct RelaxedR1CSSNARK<E: Engine, EE: EvaluationEngineTrait<E>> {
   comm_w_plus_r_inv_col: Commitment<E>,
 
   // claims about Az, Bz, and Cz polynomials
+  #[serde_as(as = "EvmCompatSerde")]
   eval_Az_at_tau: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_Bz_at_tau: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_Cz_at_tau: E::Scalar,
 
   // sum-check
   sc: SumcheckProof<E>,
 
   // claims from the end of sum-check
+  #[serde_as(as = "EvmCompatSerde")]
   eval_Az: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_Bz: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_Cz: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_E: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_L_row: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_L_col: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_val_A: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_val_B: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_val_C: E::Scalar,
 
+  #[serde_as(as = "EvmCompatSerde")]
   eval_W: E::Scalar,
 
+  #[serde_as(as = "EvmCompatSerde")]
   eval_t_plus_r_inv_row: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_row: E::Scalar, // address
+  #[serde_as(as = "EvmCompatSerde")]
   eval_w_plus_r_inv_row: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_ts_row: E::Scalar,
 
+  #[serde_as(as = "EvmCompatSerde")]
   eval_t_plus_r_inv_col: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_col: E::Scalar, // address
+  #[serde_as(as = "EvmCompatSerde")]
   eval_w_plus_r_inv_col: E::Scalar,
+  #[serde_as(as = "EvmCompatSerde")]
   eval_ts_col: E::Scalar,
 
   // a PCS evaluation argument
@@ -924,16 +934,17 @@ impl<E: Engine, EE: EvaluationEngineTrait<E>> RelaxedR1CSSNARK<E, EE> {
       assert_eq!(evals.len(), claims.len());
 
       let evals_combined_0 = (0..evals.len()).map(|i| evals[i][0] * coeffs[i]).sum();
-      let evals_combined_2 = (0..evals.len()).map(|i| evals[i][1] * coeffs[i]).sum();
-      let evals_combined_3 = (0..evals.len()).map(|i| evals[i][2] * coeffs[i]).sum();
+      let evals_combined_bound_coeff = (0..evals.len()).map(|i| evals[i][1] * coeffs[i]).sum();
+      let evals_combined_inf = (0..evals.len()).map(|i| evals[i][2] * coeffs[i]).sum();
 
       let evals = vec![
         evals_combined_0,
         e - evals_combined_0,
-        evals_combined_2,
-        evals_combined_3,
+        evals_combined_bound_coeff,
+        evals_combined_inf,
       ];
-      let poly = UniPoly::from_evals(&evals);
+
+      let poly = UniPoly::from_evals_deg3(&evals);
 
       // append the prover's message to the transcript
       transcript.absorb(b"p", &poly);
